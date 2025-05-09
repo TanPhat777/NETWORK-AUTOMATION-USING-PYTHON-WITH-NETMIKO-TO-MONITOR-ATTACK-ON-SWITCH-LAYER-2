@@ -1,0 +1,36 @@
+################## STP Spoofing ####################3
+Bước 1: Trên SW cấu hình cổng e0/3 để ngăn STP Spoofing
+int e0/3
+spanning-tree portfast
+spanning-tree bpduguard
+
+Bước 2: Trên máy ảo Kali sẽ thực hiện tấn công
+Gửi liên tục các gói tin BPDU đến cổng e0/3
+Khi đó cổng e0/3 sẽ shutdown để ngăn chặn cuộc tấn công đó
+
+Bước 3: Sử dụng code python và cấu hình các bước để bật lại cổng e0/3
+
+2. Cấp phép để chạy lệnh
+sudo chmod +x /opt/stp_auto_recover.py
+
+3. Tạo file service để tự động chạy
+(	sudo nano /etc/systemd/system/stp_auto_recover.service )
+
+Nội dung:
+[Unit]
+Description=Monitor Switch Logs and Auto Recover STP Attack
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/stp_auto_recover.py
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+
+4. Kích hoạt service
+sudo systemctl daemon-reload
+sudo systemctl enable stp_auto_recover.service
+sudo systemctl start stp_auto_recover.service
+sudo systemctl status stp_auto_recover.service
