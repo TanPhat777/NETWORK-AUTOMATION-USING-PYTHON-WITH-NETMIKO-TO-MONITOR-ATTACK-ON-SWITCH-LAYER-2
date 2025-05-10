@@ -11,7 +11,7 @@ switch = {
     "secret": "cisco123",
 }
 
-log_file_path = "/var/log/switch.log"
+log_file_path = "/var/log/syslog-remote/syslog.log"
 pattern = r"%SPANTREE-2-BLOCK_BPDUGUARD:.* (\S+)"
 
 last_violation_time = None
