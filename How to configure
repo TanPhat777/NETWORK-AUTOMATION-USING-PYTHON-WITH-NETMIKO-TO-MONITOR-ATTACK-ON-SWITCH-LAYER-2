@@ -1,0 +1,32 @@
+Cau hinh DHCP Snooping tren SW
+ip dhcp snooping
+ip dhcp snooping vlan 1
+
+int e0/3
+ip dhcp snooping trust
+ip dhcp snooping limit rate 10 # Gioi han chi 10 goi dhcp
+
+
+
+Tao file service: nano /etc/systemd/system/dhcp_snooping_protect.service
+[Unit]
+Description=DHCP Snooping Protect Script
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/dhcp_snooping_protect.py
+Restart=always
+User=root
+WorkingDirectory=/opt
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=dhcp_snooping_protect
+
+[Install]
+WantedBy=multi-user.target
+
+sudo systemctl daemon-reload
+sudo systemctl enable dhcp_snooping_protect
+sudo systemctl start dhcp_snooping_protect
+sudo systemctl status dhcp_snooping_protect
+journalctl -u dhcp_snooping_protect -f
