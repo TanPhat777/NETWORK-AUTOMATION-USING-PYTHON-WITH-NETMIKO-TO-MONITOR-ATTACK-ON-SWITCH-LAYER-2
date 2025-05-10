@@ -1,0 +1,29 @@
+Cau hinh ngan chan MAC Flooding tren SW
+int e0/3
+switchport mode access
+switchport port-security
+switchport port-security maximum 4
+switchport port-security violation shutdown
+switchport port-security mac-address sticky
+
+
+
+Tao service de code chay tu dong khi nhan log
+sudo nano /etc/systemd/system/mac-flood-protect.service
+
+[Unit]
+Description=MAC Flooding Protector Script
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/mac_flood_protect.py
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+
+sudo chmod +x /opt/mac_flood_protect.py
+sudo systemctl daemon-reload
+sudo systemctl enable mac-flood-protect
+sudo systemctl start mac-flood-protect
