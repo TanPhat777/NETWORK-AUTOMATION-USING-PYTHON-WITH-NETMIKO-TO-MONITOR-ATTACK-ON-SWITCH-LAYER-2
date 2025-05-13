@@ -1,0 +1,14 @@
+$template remote-incoming-logs,"/var/log/syslog-remote/syslog.log"
+*.* ?remote-incoming-logs
+sudo systemctl restart rsyslog.service
+sudo mkdir -p /var/log/syslog-remote
+sudo chown syslog:tanphat /var/log/syslog-remote
+sudo chmod 755 /var/log/syslog-remote/
+sudo nano /etc/rsyslog.d/remote.conf
+if $fromhost-ip == '192.168.104.6' & $fromhost-ip == '192.168.104.7' then /var/log/remote/%HOSTNAME%.log
+&stop
+sudo ufw enable
+sudo ufw reload
+sudo ufw allow 514/tcp
+sudo ufw allow 514/udp
+sudo tail -f /var/syslog-remote/syslog.log
