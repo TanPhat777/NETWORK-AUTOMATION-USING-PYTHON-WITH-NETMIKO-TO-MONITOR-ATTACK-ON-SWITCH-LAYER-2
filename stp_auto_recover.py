@@ -88,13 +88,10 @@ def monitor_interface():
 if __name__ == "__main__":
     monitor_interface()
 
-
 import time
-import re
 from datetime import datetime
 from netmiko import ConnectHandler
 
-# Cau hinh switch
 switch = {
     "device_type": "cisco_ios",
     "host": "192.168.104.7",
@@ -105,25 +102,15 @@ switch = {
 
 interface = "Ethernet0/3"
 port_shutdown = False
-last_violation_time = None
-
-# Cau hinh nguong va thoi gian
-attack_threshold_pps = 100            # nguong packets/sec
-violation_timeout = 30                # thoi gian cho bat lai cong (giay)
-poll_interval = 5                     # thoi gian kiem tra lap lai
-stable_input_threshold = 3            # so lan khong doi packets input de xem la on dinh
-
-# Regex de lay du lieu tu show interface
-packet_input_pattern = r"(\d+) packets input"
-packet_rate_pattern = r"5 minute input rate \d+ bits/sec, (\d+) packets/sec"
-
-# Trang thai theo doi
-last_packet_input = None
+poll_interval = 5
 stable_counter = 0
+stable_threshold = 5  # Sau 5 lan log khong thay doi -> bat lai cong
+
+last_attack_time = None
 
 def shutdown_interface(net_connect):
     global port_shutdown
-    print(f"[{datetime.now()}] Shutdown {interface} do phat hien tan cong")
+    print(f"[{datetime.now()}] Shutdown {interface}")
     net_connect.send_config_set([
         f"interface {interface}",
         "shutdown"
@@ -132,83 +119,57 @@ def shutdown_interface(net_connect):
 
 def enable_interface(net_connect):
     global port_shutdown
-    print(f"[{datetime.now()}] Bat lai {interface} sau khi attacker ngung tan cong")
+    print(f"[{datetime.now()}] Enable {interface}")
     net_connect.send_config_set([
         f"interface {interface}",
         "no shutdown"
     ])
     port_shutdown = False
 
-def monitor_interface():
-    global port_shutdown, last_violation_time, last_packet_input, stable_counter
+def monitor_log():
+    global port_shutdown, stable_counter, last_attack_time
+
+    last_log = ""
 
     while True:
         try:
             net_connect = ConnectHandler(**switch)
             net_connect.enable()
 
-            output = net_connect.send_command(f"show interface {interface}")
+            log_output = net_connect.send_command("show log | include Et0/3")
+            log_lines = log_output.strip().splitlines()
+            latest_log = log_lines[-1] if log_lines else ""
 
-            # Lay packets input tong cong
-            match_input = re.search(packet_input_pattern, output)
-            match_rate = re.search(packet_rate_pattern, output)
-
-            if not match_input or not match_rate:
-                print(f"[{datetime.now()}] Khong tim thay thong tin can thiet")
-                net_connect.disconnect()
-                time.sleep(poll_interval)
-                continue
-
-            packet_input = int(match_input.group(1))
-            packet_rate = int(match_rate.group(1))
-            now = datetime.now()
-
-            print(f"[{now}] Packets input: {packet_input} | Packets/sec: {packet_rate}")
-
-            # Kiem tra su thay doi goi tin input
-            if last_packet_input is not None:
-                if packet_input == last_packet_input:
-                    stable_counter += 1
-                    print(f"[{now}] Packets input khong thay doi ({stable_counter}/{stable_input_threshold})")
-                else:
-                    stable_counter = 0
-            last_packet_input = packet_input
-
-            # Phat hien tan cong
-            if packet_rate >= attack_threshold_pps:
-                last_violation_time = now
+            if "BLOCK_BPDUGUARD" in latest_log or "bpduguard error detected" in latest_log:
+                print(f"[{datetime.now()}] Phat hien tan cong BPDU Guard tren {interface}")
                 if not port_shutdown:
                     shutdown_interface(net_connect)
+                last_attack_time = datetime.now()
+                stable_counter = 0
 
-            # Neu da shutdown, kiem tra dieu kien bat lai
-            if port_shutdown and last_violation_time:
-                elapsed = (now - last_violation_time).total_seconds()
-                if elapsed > violation_timeout:
-                    # Kiem tra lai rate va input
-                    output = net_connect.send_command(f"show interface {interface}")
-                    match_input = re.search(packet_input_pattern, output)
-                    match_rate = re.search(packet_rate_pattern, output)
+            elif port_shutdown:
+                # Neu da bi shutdown, theo doi xem log co thay doi hay khong
+                if latest_log == last_log:
+                    stable_counter += 1
+                    print(f"[{datetime.now()}] Log khong thay doi ({stable_counter}/{stable_threshold})")
+                else:
+                    stable_counter = 0
+                last_log = latest_log
 
-                    if match_input and match_rate:
-                        new_packet_input = int(match_input.group(1))
-                        new_packet_rate = int(match_rate.group(1))
-                        print(f"[{now}] Kiem tra lai - packets/sec: {new_packet_rate}, packets input: {new_packet_input}")
-
-                        if new_packet_rate < attack_threshold_pps and stable_counter >= stable_input_threshold:
-                            enable_interface(net_connect)
-                            last_violation_time = None
-                            stable_counter = 0
-                        else:
-                            print(f"[{now}] Tan cong van tiep dien. Khong bat lai cong")
-                            last_violation_time = now  # reset timer
+                # Neu log on dinh => bat lai cong
+                if stable_counter >= stable_threshold:
+                    enable_interface(net_connect)
+                    stable_counter = 0
 
             net_connect.disconnect()
 
         except Exception as e:
-            print(f"[{datetime.now()}] Loi: {e}")
+            print(f"Loi: {e}")
 
         time.sleep(poll_interval)
 
 if __name__ == "__main__":
-    monitor_interface()
+    monitor_log()
+
+
 
