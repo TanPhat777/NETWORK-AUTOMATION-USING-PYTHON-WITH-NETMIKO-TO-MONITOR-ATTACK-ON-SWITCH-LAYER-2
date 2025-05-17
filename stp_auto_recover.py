@@ -89,8 +89,12 @@ if __name__ == "__main__":
     monitor_interface()
 
 import time
+import re
 from datetime import datetime
 from netmiko import ConnectHandler
+
+log_file_path = "/var/log/syslog-remote/syslog.log"
+pattern = r"%SPANTREE-2-BLOCK_BPDUGUARD.*port (\S+)"
 
 switch = {
     "device_type": "cisco_ios",
@@ -100,76 +104,97 @@ switch = {
     "secret": "cisco123",
 }
 
-interface = "Ethernet0/3"
-port_shutdown = False
+# Trạng thái theo dõi từng interface
+interface_state = {}  # { "Et0/3": {"shutdown": False, "stable_counter": 0, "last_log": ""} }
+
 poll_interval = 5
-stable_counter = 0
-stable_threshold = 5  # Sau 5 lan log khong thay doi -> bat lai cong
+stable_threshold = 5  # Số lần log không đổi thì cho rằng hacker đã ngưng
 
-last_attack_time = None
-
-def shutdown_interface(net_connect):
-    global port_shutdown
+def shutdown_interface(net_connect, interface):
     print(f"[{datetime.now()}] Shutdown {interface}")
     net_connect.send_config_set([
         f"interface {interface}",
         "shutdown"
     ])
-    port_shutdown = True
+    interface_state[interface]["shutdown"] = True
 
-def enable_interface(net_connect):
-    global port_shutdown
+def enable_interface(net_connect, interface):
     print(f"[{datetime.now()}] Enable {interface}")
     net_connect.send_config_set([
         f"interface {interface}",
         "no shutdown"
     ])
-    port_shutdown = False
+    interface_state[interface]["shutdown"] = False
+
+def tail_log():
+    with open(log_file_path, "r") as f:
+        f.seek(0, 2)  # Di chuyển đến cuối file
+        while True:
+            line = f.readline()
+            if not line:
+                time.sleep(0.1)
+                continue
+            yield line.strip()
 
 def monitor_log():
-    global port_shutdown, stable_counter, last_attack_time
+    for log_line in tail_log():
+        match = re.search(pattern, log_line)
+        if match:
+            interface = match.group(1)
+            print(f"[{datetime.now()}] Phát hiện BPDU attack trên {interface}: {log_line}")
 
-    last_log = ""
+            if interface not in interface_state:
+                interface_state[interface] = {
+                    "shutdown": False,
+                    "stable_counter": 0,
+                    "last_log": ""
+                }
 
-    while True:
-        try:
-            net_connect = ConnectHandler(**switch)
-            net_connect.enable()
+            net_connect = None
+            try:
+                net_connect = ConnectHandler(**switch)
+                net_connect.enable()
 
-            log_output = net_connect.send_command("show log | include Et0/3")
-            log_lines = log_output.strip().splitlines()
-            latest_log = log_lines[-1] if log_lines else ""
+                # Nếu chưa bị shutdown thì shutdown
+                if not interface_state[interface]["shutdown"]:
+                    shutdown_interface(net_connect, interface)
+                    interface_state[interface]["stable_counter"] = 0
 
-            if "BLOCK_BPDUGUARD" in latest_log or "bpduguard error detected" in latest_log:
-                print(f"[{datetime.now()}] Phat hien tan cong BPDU Guard tren {interface}")
-                if not port_shutdown:
-                    shutdown_interface(net_connect)
-                last_attack_time = datetime.now()
-                stable_counter = 0
+            except Exception as e:
+                print(f"Lỗi khi cấu hình switch: {e}")
 
-            elif port_shutdown:
-                # Neu da bi shutdown, theo doi xem log co thay doi hay khong
-                if latest_log == last_log:
-                    stable_counter += 1
-                    print(f"[{datetime.now()}] Log khong thay doi ({stable_counter}/{stable_threshold})")
+            finally:
+                if net_connect:
+                    net_connect.disconnect()
+
+        # Nếu port đang shutdown, theo dõi log có thay đổi không
+        for interface, state in interface_state.items():
+            if state["shutdown"]:
+                # Nếu log không đổi, tăng counter
+                if log_line == state["last_log"]:
+                    state["stable_counter"] += 1
+                    print(f"[{datetime.now()}] {interface} log không đổi ({state['stable_counter']}/{stable_threshold})")
                 else:
-                    stable_counter = 0
-                last_log = latest_log
+                    state["stable_counter"] = 0
+                state["last_log"] = log_line
 
-                # Neu log on dinh => bat lai cong
-                if stable_counter >= stable_threshold:
-                    enable_interface(net_connect)
-                    stable_counter = 0
-
-            net_connect.disconnect()
-
-        except Exception as e:
-            print(f"Loi: {e}")
-
-        time.sleep(poll_interval)
+                # Nếu ổn định, bật lại cổng
+                if state["stable_counter"] >= stable_threshold:
+                    net_connect = None
+                    try:
+                        net_connect = ConnectHandler(**switch)
+                        net_connect.enable()
+                        enable_interface(net_connect, interface)
+                        state["stable_counter"] = 0
+                    except Exception as e:
+                        print(f"Lỗi khi bật lại cổng {interface}: {e}")
+                    finally:
+                        if net_connect:
+                            net_connect.disconnect()
 
 if __name__ == "__main__":
     monitor_log()
+
 
 
 
