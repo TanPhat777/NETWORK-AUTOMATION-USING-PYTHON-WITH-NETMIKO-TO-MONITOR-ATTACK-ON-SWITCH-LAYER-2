@@ -2,6 +2,11 @@ import time
 import re
 from datetime import datetime
 from netmiko import ConnectHandler
+import pygame
+import threading
+
+log_file_path = "/var/log/syslog-remote/syslog.log"
+pattern = r"%SPANTREE-2-BLOCK_BPDUGUARD.*port (\S+)"
 
 switch = {
     "device_type": "cisco_ios",
@@ -11,82 +16,86 @@ switch = {
     "secret": "cisco123",
 }
 
-interface = "Ethernet0/3"
-port_shutdown = False
-
-# Thời gian kiểm tra (giây)
+interface_state = {}
 poll_interval = 5
+stable_threshold = 5
 
-def shutdown_interface(net_connect):
-    global port_shutdown
-    print(f"[{datetime.now()}] Shutdown {interface}")
-    net_connect.send_config_set([
-        f"interface {interface}",
-        "shutdown"
-    ])
-    port_shutdown = True
+# Hàm phát âm thanh
+def play_alert():
+    pygame.mixer.init()
+    pygame.mixer.music.load("/opt/alert.mp3")  # Đảm bảo file alert.mp3 nằm ở /opt/
+    pygame.mixer.music.play()
 
-def enable_interface(net_connect):
-    global port_shutdown
-    print(f"[{datetime.now()}] Enable {interface}")
-    net_connect.send_config_set([
-        f"interface {interface}",
-        "no shutdown"
-    ])
-    port_shutdown = False
+def tail_log():
+    with open(log_file_path, "r") as f:
+        f.seek(0, 2)
+        while True:
+            dong = f.readline()
+            if not dong:
+                time.sleep(0.1)
+                continue
+            yield dong.strip()
 
-def monitor_interface():
-    global port_shutdown
-    last_packet_input = None
-    stable_counter = 0
-    stable_threshold = 5  # So lan khong thay doi => bat lai (2 * poll_interval = 10s)
+def monitor_log():
+    for dong_log in tail_log():
+        match = re.search(pattern, dong_log)
+        if match:
+            interface = match.group(1)
+            print(f"[{datetime.now()}] Phat hien tan cong BPDU tren {interface}: {dong_log}")
+            
+            # Phát âm thanh cảnh báo
+            threading.Thread(target=play_alert, daemon=True).start()
 
-    while True:
-        try:
-            net_connect = ConnectHandler(**switch)
-            net_connect.enable()
-            output = net_connect.send_command(f"show interface {interface}")
-            net_connect.disconnect()
-
-            match = re.search(r"(\d+) packets input", output)
-            if match:
-                packet_input = int(match.group(1))
-                now = datetime.now()
-                print(f"[{now}] {interface} packets input: {packet_input}")
-
-                if last_packet_input is not None:
-                    if packet_input == last_packet_input:
-                        stable_counter += 1
-                        print(f"Khong thay doi ({stable_counter}/{stable_threshold})")
-                    else:
-                        stable_counter = 0  # reset vi packets tang
-
-                if not port_shutdown and last_packet_input is not None and packet_input > last_packet_input:
-                    net_connect = ConnectHandler(**switch)
-                    net_connect.enable()
-                    shutdown_interface(net_connect)
-                    net_connect.disconnect()
-                    stable_counter = 0
-
-                if port_shutdown and stable_counter >= stable_threshold:
-                    net_connect = ConnectHandler(**switch)
-                    net_connect.enable()
-                    enable_interface(net_connect)
-                    net_connect.disconnect()
-                    stable_counter = 0
-
-                last_packet_input = packet_input
-
+            if interface not in interface_state:
+                interface_state[interface] = {
+                    "counter": 0,
+                    "last_log": dong_log
+                }
             else:
-                print("Khong tim thay 'packets input' trong output.")
+                if dong_log == interface_state[interface]["last_log"]:
+                    interface_state[interface]["counter"] += 1
+                    print(f"[{datetime.now()}] {interface} log khong thay doi ({interface_state[interface]['counter']}/{stable_threshold})")
+                else:
+                    interface_state[interface]["counter"] = 0
+                    interface_state[interface]["last_log"] = dong_log
+                    print(f"[{datetime.now()}] {interface} phat hien log moi -> dang con bi tan cong")
 
-        except Exception as e:
-            print(f"Loi: {e}")
-
-        time.sleep(poll_interval)
+            if interface_state[interface]["counter"] >= stable_threshold:
+                print(f"[{datetime.now()}] {interface} da on dinh -> co the hacker da ngung tan cong")
+                interface_state[interface]["counter"] = 0
 
 if __name__ == "__main__":
-    monitor_interface()
+    monitor_log()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 import time
 import re
