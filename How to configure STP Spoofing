@@ -15,6 +15,9 @@ sudo chmod +x /opt/stp_auto_recover.py
 
 3. Tạo file service để tự động chạy
 (	sudo nano /etc/systemd/system/stp_auto_recover.service )
+######################## File am thanh canh bao ########################333
+1. Di chuyển file âm thanh ở mục Download vào /opt/
+root@ubuntu:~# cp /home/tanphat/Downloads/alert.mp3 /opt/
 
 Nội dung:
 [Unit]
