@@ -100,9 +100,10 @@ class BPDUMonitor:
         }
         
         # Cấu hình monitor
-        self.interface_state = defaultdict(lambda: {"counter": 0, "last_log": "", "first_detected": None})
+        self.interface_state = defaultdict(lambda: {"counter": 0, "last_log": "", "first_detected": None, "last_activity": None})
         self.poll_interval = 5
         self.stable_threshold = 5
+        self.timeout_threshold = 30  # 30 giây không có log mới = dừng tấn công
         self.alert_sound_path = "/opt/alert.mp3"
         
         # Flags điều khiển
@@ -191,7 +192,8 @@ class BPDUMonitor:
         # Lần đầu phát hiện interface này
         if interface not in self.interface_state:
             self.interface_state[interface]["first_detected"] = current_time
-            self.interface_state[interface]["counter"] = 1
+            self.interface_state[interface]["last_activity"] = current_time
+            self.interface_state[interface]["counter"] = 0
             self.interface_state[interface]["last_log"] = log_line
             
             self.logger.warning(f"BPDU Attack detected on {interface}")
@@ -201,6 +203,9 @@ class BPDUMonitor:
             threading.Thread(target=self.play_alert, daemon=True).start()
             
         else:
+            # Cập nhật thời gian hoạt động cuối cùng
+            self.interface_state[interface]["last_activity"] = current_time
+            
             # Kiểm tra xem log có thay đổi không
             if log_line == self.interface_state[interface]["last_log"]:
                 self.interface_state[interface]["counter"] += 1
@@ -228,7 +233,33 @@ class BPDUMonitor:
             # Reset counter nhưng giữ lại thông tin để theo dõi
             self.interface_state[interface]["counter"] = 0
     
-    def get_interface_status(self, interface):
+    def check_timeout_attacks(self):
+        """Kiểm tra các interface có thể đã dừng tấn công do timeout"""
+        current_time = datetime.now()
+        stopped_interfaces = []
+        
+        for interface, state in self.interface_state.items():
+            if state["last_activity"] is None:
+                continue
+                
+            # Tính thời gian không có hoạt động
+            time_since_last_activity = current_time - state["last_activity"]
+            
+            # Nếu không có log mới trong timeout_threshold giây
+            if time_since_last_activity.total_seconds() >= self.timeout_threshold:
+                if state["first_detected"] is not None:  # Đang trong trạng thái bị tấn công
+                    attack_duration = current_time - state["first_detected"]
+                    self.logger.info(
+                        f"{interface} - Attack stopped (timeout detection). "
+                        f"Duration: {attack_duration}, "
+                        f"Last activity: {time_since_last_activity.total_seconds():.1f}s ago"
+                    )
+                    stopped_interfaces.append(interface)
+        
+        # Đánh dấu các interface đã dừng
+        for interface in stopped_interfaces:
+            self.interface_state[interface]["first_detected"] = None
+            self.interface_state[interface]["counter"] = 0
         """Lấy trạng thái interface từ switch (tùy chọn)"""
         try:
             with ConnectHandler(**self.switch_config) as connection:
@@ -239,7 +270,7 @@ class BPDUMonitor:
             self.logger.error(f"Failed to get interface status: {e}")
             return None
     
-    def generate_summary_report(self):
+    def get_interface_status(self, interface):
         """Tạo báo cáo tổng kết"""
         if not self.interface_state:
             self.logger.info("No BPDU attacks detected during this session")
@@ -264,6 +295,9 @@ class BPDUMonitor:
         self.logger.info("Starting BPDU attack monitoring...")
         self.logger.info(f"Monitoring log file: {self.log_file_path}")
         self.logger.info(f"Stable threshold: {self.stable_threshold}")
+        self.logger.info(f"Timeout threshold: {self.timeout_threshold}s")
+        
+        last_timeout_check = datetime.now()
         
         try:
             for log_line in self.tail_log_file():
@@ -275,6 +309,12 @@ class BPDUMonitor:
                 if match:
                     interface = match.group(1)
                     self.process_bpdu_attack(interface, log_line)
+                
+                # Kiểm tra timeout mỗi 10 giây
+                current_time = datetime.now()
+                if (current_time - last_timeout_check).total_seconds() >= 10:
+                    self.check_timeout_attacks()
+                    last_timeout_check = current_time
                     
         except KeyboardInterrupt:
             self.logger.info("Monitoring stopped by user")
