@@ -1,3 +1,25 @@
+################### Dùng file .desktop trong thư mục autostart (GUI + hiện terminal) ###########################
+🔧Bước 1: Tạo thư mục autostart (nếu chưa có)
+mkdir -p ~/.config/autostart
+
+🔧Bước 2: Tạo file .desktop để tự động mở terminal và chạy script
+nano ~/.config/autostart/start_script.desktop
+
+🔧 Bước 3: Thêm nội dung như sau (sửa your_script.py tương ứng):
+[Desktop Entry]
+Type=Application
+Name=Start My Script
+Exec=gnome-terminal -- bash -c "python3 /opt/stp_auto_recover.py; exec bash"
+X-GNOME-Autostart-enabled=true
+📌 Ghi chú:
+
+gnome-terminal: mở cửa sổ terminal.
+
+-- bash -c "...": chạy lệnh bên trong bash.
+
+exec bash: giữ terminal mở sau khi script chạy xong.
+
+
 ################## STP Spoofing ####################3
 Bước 1: Trên SW cấu hình cổng e0/3 để ngăn STP Spoofing
 int e0/3
