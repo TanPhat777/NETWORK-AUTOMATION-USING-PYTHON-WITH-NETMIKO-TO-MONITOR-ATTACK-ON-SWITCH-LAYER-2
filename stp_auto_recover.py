@@ -84,11 +84,11 @@ import signal
 import sys
 
 class BPDUMonitor:
-    def __init__(self, config_file=None):
+    def __init__(self):
         # Cấu hình logging
         self.setup_logging()
 
-        # Cấu hình mặc �^q�^knh
+        # Cau hinh mac dinh
         self.log_file_path = "/var/log/syslog-remote/syslog.log"
         self.pattern = r"%SPANTREE-2-BLOCK_BPDUGUARD.*port (\S+)"
         self.switch_config = {
@@ -98,32 +98,35 @@ class BPDUMonitor:
             "password": "cisco123",
             "secret": "cisco123",
         }
-
-        # Cấu hình monitor
-        self.interface_state = defaultdict(lambda: {"counter": 0, "last_log": "", "first_detected": None, "last_>
-        self.poll_interval = 5
+        
+        # Cau hinh monitor
+        self.interface_state = defaultdict(lambda: {
+            "counter": 0, 
+            "last_log": "", 
+            "first_detected": None, 
+            "last_activity": None,
+            "is_attacking": False
+        })
         self.stable_threshold = 5
-        self.timeout_threshold = 30  # 60 giây không có log m�^{i = dừng tấn công
+        self.timeout_threshold = 30  # 30 giay khong co log moi = dung tan cong
         self.alert_sound_path = "/opt/alert.mp3"
 
-        # Flags �^qi�^au khi�^cn
+        # Flags dieu khien
         self.running = True
         self.sound_enabled = True
 
-        # Kh�^=i tạo pygame mixer
+        # Khoi tao pygame mixer
         self.init_sound_system()
 
-        # Thiết lập signal handler �^q�^c dừng gracefully
-	signal.signal(signal.SIGINT, self.signal_handler)
+        # Thiet lap signal handler de dung gracefully
+        signal.signal(signal.SIGINT, self.signal_handler)
         signal.signal(signal.SIGTERM, self.signal_handler)
     
     def setup_logging(self):
-        """Thiết lập logging system"""
-        # Tạo thư mục logs nếu chưa t�^sn tại
+        """Thiet lap logging system"""
         log_dir = Path("logs")
         log_dir.mkdir(exist_ok=True)
 
-        # Cấu hình logging
         log_filename = log_dir / f"bpdu_monitor_{datetime.now().strftime('%Y%m%d')}.log"
 
         logging.basicConfig(
@@ -136,39 +139,37 @@ class BPDUMonitor:
         )
 
         self.logger = logging.getLogger(__name__)
-        self.logger.info("BPDU Monitor started")
+        self.logger.info("Bat dau theo doi tan cong BPDU")
     
     def init_sound_system(self):
-        """Kh�^=i tạo h�^g th�^qng âm thanh"""
+        """Khoi tao he thong am thanh"""
         try:
             pygame.mixer.init()
-            # Ki�^cm tra file âm thanh có t�^sn tại không
             if not Path(self.alert_sound_path).exists():
-                self.logger.warning(f"Alert sound file not found: {self.alert_sound_path}")
+                self.logger.warning(f"Khong tim thay file am thanh: {self.alert_sound_path}")
                 self.sound_enabled = False
             else:
-                self.logger.info("Sound system initialized successfully")
+                self.logger.info("He thong am thanh da san sang")
         except Exception as e:
-            self.logger.error(f"Failed to initialize sound system: {e}")
+            self.logger.error(f"Loi khoi tao am thanh: {e}")
             self.sound_enabled = False
                
     def play_alert(self):
-        """Phát âm thanh cảnh báo"""
+        """Phat am thanh canh bao"""
         if not self.sound_enabled:
             return
 
         try:
             pygame.mixer.music.load(self.alert_sound_path)
             pygame.mixer.music.play()
-            self.logger.debug("Alert sound played")
         except Exception as e:
-            self.logger.error(f"Failed to play alert sound: {e}")
+            self.logger.error(f"Loi phat am thanh: {e}")
     
     def tail_log_file(self):
-        """�^p�^mc log file theo th�^}i gian thực"""
+        """Doc log file theo thoi gian thuc"""
         try:
             with open(self.log_file_path, "r", encoding='utf-8') as f:
-                # Di chuy�^cn �^qến cu�^qi file
+                # Di chuyen den cuoi file
                 f.seek(0, 2)
 
                 while self.running:
@@ -179,143 +180,124 @@ class BPDUMonitor:
                     yield line.strip()
 
         except FileNotFoundError:
-            self.logger.error(f"Log file not found: {self.log_file_path}")
+            self.logger.error(f"Khong tim thay file log: {self.log_file_path}")
             return
         except Exception as e:
-            self.logger.error(f"Error reading log file: {e}")
+            self.logger.error(f"Loi doc file log: {e}")
             return
     
     def process_bpdu_attack(self, interface, log_line):
-        """Xử lý khi phát hi�^gn tấn công BPDU"""
+        """Xu ly khi phat hien tan cong BPDU"""
         current_time = datetime.now()
+        state = self.interface_state[interface]
 
-        # Lần �^qầu phát hi�^gn interface này
-        if interface not in self.interface_state:
-            self.interface_state[interface]["first_detected"] = current_time
-            self.interface_state[interface]["last_activity"] = current_time
-            self.interface_state[interface]["counter"] = 0
-            self.interface_state[interface]["last_log"] = log_line
+        # Cap nhat thoi gian hoat dong cuoi cung
+        state["last_activity"] = current_time
 
-            self.logger.warning(f"BPDU Attack detected on {interface}")
+        # Lan dau phat hien tan cong tren interface nay
+        if not state["is_attacking"]:
+            state["first_detected"] = current_time
+            state["is_attacking"] = True
+            state["counter"] = 0
+            state["last_log"] = log_line
+
+            self.logger.warning(f"PHAT HIEN TAN CONG BPDU tren cong {interface}")
             self.logger.info(f"Log: {log_line}")
 
-            # Phát âm thanh cảnh báo trong thread riêng
+            # Phat am thanh canh bao
             threading.Thread(target=self.play_alert, daemon=True).start()
 
         else:
-            # Cập nhật th�^}i gian hoạt �^q�^yng cu�^qi cùng
-            self.interface_state[interface]["last_activity"] = current_time
-
-            # Ki�^cm tra xem log có thay �^q�^ui không
-            if log_line == self.interface_state[interface]["last_log"]:
-                self.interface_state[interface]["counter"] += 1
+            # Dang trong trang thai bi tan cong
+            if log_line == state["last_log"]:
+                state["counter"] += 1
                 self.logger.info(
-                    f"{interface} - Stable log count: "
-                    f"{self.interface_state[interface]['counter']}/{self.stable_threshold}"
+                    f"{interface} - So lan log lap lai: {state['counter']}/{self.stable_threshold}"
                 )
             else:
-                # Log m�^{i xuất hi�^gn -> vẫn �^qang b�^k tấn công
-                self.interface_state[interface]["counter"] = 0
-                self.interface_state[interface]["last_log"] = log_line
-                self.logger.warning(f"BPDU Attack detected on {interface}")
-            self.logger.info(f"Log: {log_line}")
+                # Log moi xuat hien -> van dang bi tan cong
+                state["counter"] = 0
+                state["last_log"] = log_line
+                self.logger.info(f"Log: {log_line}")
 
-            # Phát âm thanh cảnh báo trong thread riêng
-            threading.Thread(target=self.play_alert, daemon=True).start()
-
-        else:
-            # Cập nhật th�^}i gian hoạt �^q�^yng cu�^qi cùng
-            self.interface_state[interface]["last_activity"] = current_time
-
-            # Ki�^cm tra xem log có thay �^q�^ui không
-            if log_line == self.interface_state[interface]["last_log"]:
-                self.interface_state[interface]["counter"] += 1
-                self.logger.info(
-                    f"{interface} - Stable log count: "
-                    f"{self.interface_state[interface]['counter']}/{self.stable_threshold}"
-                )
-            else:
-                # Log m�^{i xuất hi�^gn -> vẫn �^qang b�^k tấn công
-                self.interface_state[interface]["counter"] = 0
-                self.interface_state[interface]["last_log"] = log_line
-                self.logger.warning(f"{interface} - New attack pattern detected")
-
-                # Phát âm thanh cảnh báo
-                threading.Thread(target=self.play_alert, daemon=True).start()
-
-        # Ki�^cm tra xem có �^un �^q�^knh không
-        if self.interface_state[interface]["counter"] >= self.stable_threshold:
-            attack_duration = current_time - self.interface_state[interface]["first_detected"]
+        # Kiem tra xem co on dinh khong (co the da dung)
+        if state["counter"] >= self.stable_threshold:
+            attack_duration = current_time - state["first_detected"]
             self.logger.info(
-                f"{interface} - Attack appears to have stopped. "
-                f"Duration: {attack_duration}"
+                f"{interface} - Tan cong co ve da dung. "
+                f"Thoi gian tan cong: {attack_duration}"
             )
-
-            # Reset counter nhưng giữ lại thông tin �^q�^c theo dõi
-            self.interface_state[interface]["counter"] = 0
+            
+            # Danh dau da dung tan cong
+            state["is_attacking"] = False
+            state["counter"] = 0
+            state["first_detected"] = None
     
     def check_timeout_attacks(self):
-        """Ki�^cm tra các interface có th�^c �^qã dừng tấn công do timeout"""
+        """Kiem tra cac interface co the da dung tan cong do timeout"""
         current_time = datetime.now()
-        stopped_interfaces = []
+        
         for interface, state in self.interface_state.items():
-            if state["last_activity"] is None:
+            if not state["is_attacking"] or state["last_activity"] is None:
                 continue
 
-            # Tính th�^}i gian không có hoạt �^q�^yng
+            # Tinh thoi gian khong co hoat dong
             time_since_last_activity = current_time - state["last_activity"]
 
-            # Nếu không có log m�^{i trong timeout_threshold giây
+            # Neu khong co log moi trong timeout_threshold giay
             if time_since_last_activity.total_seconds() >= self.timeout_threshold:
-                if state["first_detected"] is not None:  # �^pang trong trạng thái b�^k tấn công
-                    attack_duration = current_time - state["first_detected"]
-                    self.logger.info(
-                        f"{interface} - Attack stopped (timeout detection). "
-                        f"Duration: {attack_duration}, "
-                        f"Last activity: {time_since_last_activity.total_seconds():.1f}s ago"
-                    )
-                    stopped_interfaces.append(interface)
-
-        # �^pánh dấu các interface �^qã dừng
-        for interface in stopped_interfaces:
-            self.interface_state[interface]["first_detected"] = None
-            self.interface_state[interface]["counter"] = 0
-        """Lấy trạng thái interface từ switch (tùy ch�^mn)"""
+                attack_duration = current_time - state["first_detected"]
+                self.logger.info(
+                    f"{interface} - Tan cong da dung (phat hien timeout). "
+                    f"Thoi gian tan cong: {attack_duration}, "
+                    f"Lan cuoi hoat dong: {time_since_last_activity.total_seconds():.1f}s truoc"
+                )
+                
+                # Danh dau da dung tan cong
+                state["is_attacking"] = False
+                state["first_detected"] = None
+                state["counter"] = 0
+    
+    def get_interface_status(self, interface):
+        """Lay trang thai interface tu switch"""
         try:
             with ConnectHandler(**self.switch_config) as connection:
                 connection.enable()
                 output = connection.send_command(f"show interface {interface} status")
                 return output
         except Exception as e:
-            self.logger.error(f"Failed to get interface status: {e}")
+            self.logger.error(f"Loi lay trang thai interface: {e}")
             return None
     
-    def get_interface_status(self, interface):
-        """Tạo báo cáo t�^ung kết"""
+    def generate_summary_report(self):
+        """Tao bao cao tong ket"""
+        active_attacks = [interface for interface, state in self.interface_state.items() 
+                         if state["is_attacking"]]
+        
         if not self.interface_state:
-            self.logger.info("No BPDU attacks detected during this session")
+            self.logger.info("Khong phat hien tan cong BPDU nao trong phien nay")
             return
             
-        self.logger.info("BPDU Attack Summary Report:")
+        self.logger.info("BAO CAO TONG KET TAN CONG BPDU:")
         self.logger.info("=" * 50)
 
         for interface, state in self.interface_state.items():
-            if state["first_detected"]:
+            if state["first_detected"] or state["is_attacking"]:
+                status = "Dang tan cong" if state["is_attacking"] else "Da dung"
                 self.logger.info(
-                    f"Interface: {interface}\n"
-                    f"  First Detected: {state['first_detected']}\n"
-                    f"  Current Status: {'Stable' if state['counter'] >= self.stable_threshold else 'Active'}\n"
-                    f"  Stability Counter: {state['counter']}"
+                    f"Cong: {interface}\n"
+                    f"  Trang thai: {status}\n"
+                    f"  Lan dau phat hien: {state['first_detected']}"
                 )
 
         self.logger.info("=" * 50)
     
     def monitor_logs(self):
-        """Hàm chính �^q�^c monitor logs"""
-        self.logger.info("Starting BPDU attack monitoring...")
-        self.logger.info(f"Monitoring log file: {self.log_file_path}")
-        self.logger.info(f"Stable threshold: {self.stable_threshold}")
-        self.logger.info(f"Timeout threshold: {self.timeout_threshold}s")
+        """Ham chinh de monitor logs"""
+        self.logger.info("Bat dau theo doi tan cong BPDU...")
+        self.logger.info(f"Dang theo doi file log: {self.log_file_path}")
+        self.logger.info(f"Nguong on dinh: {self.stable_threshold}")
+        self.logger.info(f"Nguong timeout: {self.timeout_threshold}s")
 
         last_timeout_check = datetime.now()
 
@@ -324,48 +306,48 @@ class BPDUMonitor:
                 if not self.running:
                     break
 
-                # Tìm kiếm pattern BPDU attack
+                # Tim kiem pattern BPDU attack
                 match = re.search(self.pattern, log_line)
                 if match:
                     interface = match.group(1)
                     self.process_bpdu_attack(interface, log_line)
 
-                # Ki�^cm tra timeout m�^wi 10 giây
+                # Kiem tra timeout moi 10 giay
                 current_time = datetime.now()
                 if (current_time - last_timeout_check).total_seconds() >= 10:
                     self.check_timeout_attacks()
                     last_timeout_check = current_time
 
         except KeyboardInterrupt:
-            self.logger.info("Monitoring stopped by user")
+            self.logger.info("Da dung theo doi theo yeu cau nguoi dung")
         except Exception as e:
-            self.logger.error(f"Error during monitoring: {e}")
+            self.logger.error(f"Loi trong qua trinh theo doi: {e}")
         finally:
             self.cleanup()
     
     def signal_handler(self, signum, frame):
-        """Xử lý signal �^q�^c dừng chương trình gracefully"""
-        self.logger.info(f"Received signal {signum}, shutting down...")
+        """Xu ly signal de dung chuong trinh gracefully"""
+        self.logger.info(f"Nhan signal {signum}, dang tat chuong trinh...")
         self.running = False
     
     def cleanup(self):
-        """D�^mn dẹp tài nguyên"""
-        self.logger.info("Cleaning up resources...")
+        """Don dep tai nguyen"""
+        self.logger.info("Dang don dep tai nguyen...")
 
-        # Tạo báo cáo t�^ung kết
+        # Tao bao cao tong ket
         self.generate_summary_report()
 
-        # Dừng pygame mixer
+        # Dung pygame mixer
         if self.sound_enabled:
             try:
                 pygame.mixer.quit()
             except:
                 pass
 
-        self.logger.info("BPDU Monitor stopped")
+        self.logger.info("Da dung BPDU Monitor")
 
 def main():
-    """Hàm main"""
+    """Ham main"""
     monitor = BPDUMonitor()
     monitor.monitor_logs()
 
