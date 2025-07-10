@@ -1,5 +1,3 @@
-File: nano /opt/mac_flooding_protect.py
-
 import time
 import re
 import logging
@@ -19,14 +17,8 @@ class MACFloodingMonitor:
 
         # Cau hinh mac dinh
         self.log_file_path = "/var/log/syslog-remote/syslog.log"
-        # Pattern cho MAC flooding - có thể là CAM table full, port security violation, etc.
-        self.patterns = [
-            r"%PM-4-ERR_DISABLE.*psecure-violation.*port (\S+)",
-            r"%SW_MATM-4-MACFLAP_NOTIF.*port (\S+)",
-            r"%C4K_EBM-4-HOSTFLAPPING.*port (\S+)",
-            r"%SW_MATM-4-MACFLAP.*interface (\S+)",
-            r"%ETHCNTR-3-LOOP_BACK_DETECTED.*port (\S+)"
-        ]
+        # Pattern cho MAC flooding - chỉ lấy pattern chính từ log thực tế
+        self.pattern = r"XPM-4-ERR_DISABLE.*psecure-violation.*detected on (\S+)"
         self.switch_config = {
             "device_type": "cisco_ios",
             "host": "192.168.104.7",
@@ -42,7 +34,6 @@ class MACFloodingMonitor:
             "first_detected": None, 
             "last_activity": None,
             "is_attacking": False,
-            "attack_type": "",
             "mac_count": 0,
             "violation_count": 0
         })
@@ -125,31 +116,16 @@ class MACFloodingMonitor:
             self.logger.error(f"Loi doc file log: {e}")
             return
     
-    def detect_attack_type(self, log_line):
-        """Xac dinh loai tan cong MAC flooding"""
-        if "psecure-violation" in log_line:
-            return "Port Security Violation"
-        elif "MACFLAP" in log_line:
-            return "MAC Address Flapping"
-        elif "HOSTFLAPPING" in log_line:
-            return "Host Flapping"
-        elif "LOOP_BACK_DETECTED" in log_line:
-            return "Loop Back Detection"
-        else:
-            return "Unknown MAC Flooding"
-    
     def get_mac_table_count(self, interface):
         """Lay so luong MAC address tren interface"""
         try:
             with ConnectHandler(**self.switch_config) as connection:
                 connection.enable()
-                output = connection.send_command(f"show mac address-table interface {interface} | count")
-                # Parse output to get MAC count
-                lines = output.strip().split('\n')
-                for line in lines:
-                    if line.strip().isdigit():
-                        return int(line.strip())
-                return 0
+                output = connection.send_command(f"show mac address-table interface {interface}")
+                # Đếm số dòng MAC address (bỏ qua header)
+                mac_lines = [line for line in output.split('\n') 
+                           if re.match(r'^\s*\d+\s+[0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4}', line)]
+                return len(mac_lines)
         except Exception as e:
             self.logger.error(f"Loi lay so luong MAC: {e}")
             return 0
@@ -168,14 +144,12 @@ class MACFloodingMonitor:
             state["is_attacking"] = True
             state["counter"] = 0
             state["last_log"] = log_line
-            state["attack_type"] = self.detect_attack_type(log_line)
             state["violation_count"] = 1
 
             # Lay so luong MAC hien tai
             state["mac_count"] = self.get_mac_table_count(interface)
 
             self.logger.warning(f"PHAT HIEN TAN CONG MAC FLOODING tren cong {interface}")
-            self.logger.info(f"Loai tan cong: {state['attack_type']}")
             self.logger.info(f"So luong MAC hien tai: {state['mac_count']}")
             self.logger.info(f"Log: {log_line}")
 
@@ -271,7 +245,6 @@ class MACFloodingMonitor:
                 self.logger.info(
                     f"Cong: {interface}\n"
                     f"  Trang thai: {status}\n"
-                    f"  Loai tan cong: {state['attack_type']}\n"
                     f"  Lan dau phat hien: {state['first_detected']}\n"
                     f"  Tong violations: {state['violation_count']}\n"
                     f"  So MAC cuoi cung: {state['mac_count']}"
@@ -294,12 +267,10 @@ class MACFloodingMonitor:
                     break
 
                 # Tim kiem pattern MAC flooding attack
-                for pattern in self.patterns:
-                    match = re.search(pattern, log_line)
-                    if match:
-                        interface = match.group(1)
-                        self.process_mac_flooding_attack(interface, log_line)
-                        break
+                match = re.search(self.pattern, log_line)
+                if match:
+                    interface = match.group(1)
+                    self.process_mac_flooding_attack(interface, log_line)
 
                 # Kiem tra timeout moi 10 giay
                 current_time = datetime.now()
