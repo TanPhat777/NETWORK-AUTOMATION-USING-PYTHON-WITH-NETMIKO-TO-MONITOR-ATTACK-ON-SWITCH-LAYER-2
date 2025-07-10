@@ -69,6 +69,206 @@ if __name__ == "__main__":
 
 
 
+##################
+import time
+import re
+import logging
+from datetime import datetime
+from pathlib import Path
+from netmiko import ConnectHandler
+import pygame
+import threading
+from collections import defaultdict
+import signal
+import sys
+
+class BPDUMonitor:
+    def __init__(self):
+        self.setup_logging()
+
+        # Cấu hình hệ thống
+        self.log_file_path = "/var/log/syslog-remote/syslog.log"
+        self.pattern = r"%SPANTREE-2-BLOCK_BPDUGUARD.*port (\S+)"
+        self.switch_config = {
+            "device_type": "cisco_ios",
+            "host": "192.168.104.7",
+            "username": "admin",
+            "password": "cisco123",
+            "secret": "cisco123",
+        }
+
+        self.interface_state = defaultdict(lambda: {
+            "counter": 0,
+            "last_log": "",
+            "first_detected": None,
+            "last_activity": None,
+            "is_attacking": False
+        })
+
+        self.stable_threshold = 5
+        self.timeout_threshold = 30  # giây
+        self.alert_sound_path = "/opt/alert.mp3"
+        self.running = True
+        self.sound_enabled = True
+
+        self.init_sound_system()
+        signal.signal(signal.SIGINT, self.signal_handler)
+        signal.signal(signal.SIGTERM, self.signal_handler)
+
+    def setup_logging(self):
+        Path("logs").mkdir(exist_ok=True)
+        log_filename = Path("logs") / f"bpdu_monitor_{datetime.now().strftime('%Y%m%d')}.log"
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_filename, encoding='utf-8'),
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+        self.logger.info("Bắt đầu theo dõi tấn công BPDU")
+
+    def init_sound_system(self):
+        try:
+            pygame.mixer.init()
+            if not Path(self.alert_sound_path).exists():
+                self.logger.warning(f"Không tìm thấy file âm thanh: {self.alert_sound_path}")
+                self.sound_enabled = False
+            else:
+                self.logger.info("Hệ thống âm thanh đã sẵn sàng")
+        except Exception as e:
+            self.logger.error(f"Lỗi khởi tạo âm thanh: {e}")
+            self.sound_enabled = False
+
+    def play_alert(self):
+        if not self.sound_enabled:
+            return
+        try:
+            pygame.mixer.music.load(self.alert_sound_path)
+            pygame.mixer.music.play()
+        except Exception as e:
+            self.logger.error(f"Lỗi phát âm thanh: {e}")
+
+    def tail_log_file(self):
+        try:
+            with open(self.log_file_path, "r", encoding='utf-8') as f:
+                f.seek(0, 2)
+                while self.running:
+                    line = f.readline()
+                    if not line:
+                        time.sleep(0.1)
+                        continue
+                    yield line.strip()
+        except Exception as e:
+            self.logger.error(f"Lỗi đọc file log: {e}")
+            return
+
+    def process_bpdu_attack(self, interface, log_line):
+        now = datetime.now()
+        state = self.interface_state[interface]
+        state["last_activity"] = now
+
+        if not state["is_attacking"]:
+            state.update({
+                "is_attacking": True,
+                "first_detected": now,
+                "counter": 0,
+                "last_log": log_line
+            })
+            self.logger.warning(f"PHÁT HIỆN TẤN CÔNG BPDU TRÊN CỔNG {interface}")
+            threading.Thread(target=self.play_alert, daemon=True).start()
+        else:
+            if log_line == state["last_log"]:
+                state["counter"] += 1
+            else:
+                state["counter"] = 0
+                state["last_log"] = log_line
+
+        if state["counter"] >= self.stable_threshold:
+            duration = now - state["first_detected"]
+            self.logger.info(f"{interface} - Tấn công đã DỪNG. Thời gian: {duration}")
+            state.update({
+                "is_attacking": False,
+                "first_detected": None,
+                "counter": 0
+            })
+
+    def check_timeout_attacks(self):
+        now = datetime.now()
+        for interface, state in self.interface_state.items():
+            if state["is_attacking"] and state["last_activity"]:
+                delta = now - state["last_activity"]
+                if delta.total_seconds() >= self.timeout_threshold:
+                    duration = now - state["first_detected"]
+                    self.logger.info(
+                        f"{interface} - Tấn công đã DỪNG (timeout). Thời gian: {duration}, "
+                        f"Lần cuối hoạt động: {delta.total_seconds():.1f}s trước"
+                    )
+                    state.update({
+                        "is_attacking": False,
+                        "first_detected": None,
+                        "counter": 0
+                    })
+
+    def generate_summary_report(self):
+        if not self.interface_state:
+            self.logger.info("Không phát hiện tấn công BPDU nào.")
+            return
+
+        self.logger.info("BÁO CÁO TỔNG KẾT BPDU:")
+        self.logger.info("=" * 50)
+        for interface, state in self.interface_state.items():
+            if state["first_detected"] or state["is_attacking"]:
+                status = "Đang tấn công" if state["is_attacking"] else "Đã dừng"
+                self.logger.info(
+                    f"Cổng: {interface}\n"
+                    f"  Trạng thái: {status}\n"
+                    f"  Lần đầu phát hiện: {state['first_detected']}"
+                )
+        self.logger.info("=" * 50)
+
+    def monitor_logs(self):
+        self.logger.info("Đang theo dõi file log: %s", self.log_file_path)
+        last_check = datetime.now()
+        try:
+            for line in self.tail_log_file():
+                if not self.running:
+                    break
+                match = re.search(self.pattern, line)
+                if match:
+                    interface = match.group(1)
+                    self.process_bpdu_attack(interface, line)
+
+                now = datetime.now()
+                if (now - last_check).total_seconds() >= 10:
+                    self.check_timeout_attacks()
+                    last_check = now
+        finally:
+            self.cleanup()
+
+    def signal_handler(self, signum, frame):
+        self.logger.info(f"Nhận tín hiệu {signum}, dừng chương trình...")
+        self.running = False
+
+    def cleanup(self):
+        self.logger.info("Đang dọn dẹp tài nguyên...")
+        self.generate_summary_report()
+        if self.sound_enabled:
+            try:
+                pygame.mixer.quit()
+            except:
+                pass
+        self.logger.info("Đã dừng BPDU Monitor")
+
+def main():
+    monitor = BPDUMonitor()
+    monitor.monitor_logs()
+
+if __name__ == "__main__":
+    main()
+
+
 
 ################################# Code Claud.ai ####################################33
 import time
