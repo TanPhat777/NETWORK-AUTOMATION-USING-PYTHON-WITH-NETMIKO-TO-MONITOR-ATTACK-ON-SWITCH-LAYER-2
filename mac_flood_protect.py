@@ -21,7 +21,7 @@ class MACFloodingMonitor:
         self.pattern = r"XPM-4-ERR_DISABLE.*psecure-violation.*detected on (\S+)"
         self.switch_config = {
             "device_type": "cisco_ios",
-            "host": "192.168.104.7",
+            "host": "192.168.104.6",
             "username": "admin",
             "password": "cisco123",
             "secret": "cisco123",
