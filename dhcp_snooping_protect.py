@@ -11,36 +11,30 @@ from collections import defaultdict
 import signal
 import sys
 
-class DHCPSpoofMonitor:
+class DHCPSnoopingMonitor:
     def __init__(self):
         self.setup_logging()
 
-        # Đường dẫn log syslog
         self.log_file_path = "/var/log/syslog-remote/syslog.log"
-        # Mẫu log DHCP spoofing
-        self.pattern = r"%DHCP_SNOOPING-5-DHCP_SPOOF: .* on port (\\S+)"
 
-        # Netmiko switch config với IP 192.168.104.6
+        # Mẫu log cảnh báo DHCP snooping rate-limit
+        self.pattern = r"%DHCP_SNOOPING-\d+-DHCP_SNOOPING_ERRDISABLE_WARNING:.*interface (\S+)"
+
         self.switch_config = {
             "device_type": "cisco_ios",
-            "host": "192.168.104.6",
+            "host": "192.168.104.7",  # IP mới
             "username": "admin",
             "password": "cisco123",
             "secret": "cisco123",
         }
 
         self.alert_sound_path = "/opt/alert.mp3"
-
-        # Trạng thái theo cổng
         self.interface_state = defaultdict(lambda: {
-            "counter": 0,
-            "last_log": "",
+            "is_attacking": False,
             "first_detected": None,
             "last_activity": None,
-            "is_attacking": False
         })
 
-        self.stable_threshold = 5
         self.timeout_threshold = 30
         self.running = True
         self.sound_enabled = True
@@ -52,30 +46,27 @@ class DHCPSpoofMonitor:
     def setup_logging(self):
         log_dir = Path("logs")
         log_dir.mkdir(exist_ok=True)
-        fn = f"dhcp_spoof_monitor_{datetime.now().strftime('%Y%m%d')}.log"
+        fn = f"dhcp_snooping_monitor_{datetime.now().strftime('%Y%m%d')}.log"
         log_file = log_dir / fn
 
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(message)s",
-            handlers=[
-                logging.FileHandler(log_file, encoding="utf-8"),
-                logging.StreamHandler(sys.stdout)
-            ]
+            handlers=[logging.FileHandler(log_file, encoding="utf-8")]
         )
         self.logger = logging.getLogger(__name__)
-        self.logger.info("Bắt đầu theo dõi tấn công DHCP spoofing")
+        self.logger.info("Bắt đầu theo dõi DHCP Snooping (rate-limit)")
 
     def init_sound_system(self):
         try:
             pygame.mixer.init()
             if not Path(self.alert_sound_path).exists():
-                self.logger.warning(f"Không tìm thấy file âm thanh: {self.alert_sound_path}")
+                self.logger.warning(f"Không tìm thấy âm thanh: {self.alert_sound_path}")
                 self.sound_enabled = False
             else:
-                self.logger.info("Hệ thống âm thanh đã sẵn sàng")
+                self.logger.info("Âm thanh cảnh báo đã sẵn sàng")
         except Exception as e:
-            self.logger.error(f"Lỗi khởi tạo âm thanh: {e}")
+            self.logger.error(f"Lỗi hệ thống âm thanh: {e}")
             self.sound_enabled = False
 
     def play_alert(self):
@@ -98,7 +89,7 @@ class DHCPSpoofMonitor:
                         continue
                     yield line.strip()
         except Exception as e:
-            self.logger.error(f"Lỗi đọc file log: {e}")
+            self.logger.error(f"Lỗi đọc log: {e}")
 
     def process_attack(self, interface, log_line):
         now = datetime.now()
@@ -108,29 +99,10 @@ class DHCPSpoofMonitor:
         if not st["is_attacking"]:
             st["is_attacking"] = True
             st["first_detected"] = now
-            st["counter"] = 0
-            st["last_log"] = log_line
 
-            self.logger.warning(f"PHÁT HIỆN TẤN CÔNG DHCP SPOOFING TRÊN CỔNG {interface}")
+            self.logger.warning(f"PHÁT HIỆN TẤN CÔNG DHCP SNOOPING TRÊN CỔNG {interface}")
             self.logger.info(f"Log: {log_line}")
             threading.Thread(target=self.play_alert, daemon=True).start()
-        else:
-            if log_line == st["last_log"]:
-                st["counter"] += 1
-                self.logger.info(f"{interface} - Số lần log lặp lại: {st['counter']}/{self.stable_threshold}")
-            else:
-                st["counter"] = 0
-                st["last_log"] = log_line
-                self.logger.info(f"Log: {log_line}")
-
-        if st["counter"] >= self.stable_threshold:
-            dur = now - st["first_detected"]
-            self.logger.info(f"{interface} - Tấn công có thể đã tạm dừng. Thời gian: {dur}")
-            st.update({
-                "is_attacking": False,
-                "first_detected": None,
-                "counter": 0
-            })
 
     def check_timeout_attacks(self):
         now = datetime.now()
@@ -142,30 +114,19 @@ class DHCPSpoofMonitor:
                     self.logger.info(f"{iface} - Tấn công đã dừng (timeout). Thời gian: {dur}")
                     st.update({
                         "is_attacking": False,
-                        "first_detected": None,
-                        "counter": 0
+                        "first_detected": None
                     })
 
     def generate_summary_report(self):
-        if not self.interface_state:
-            self.logger.info("Không phát hiện vụ tấn công DHCP spoofing nào.")
-            return
-
-        self.logger.info("==== BÁO CÁO TỔNG KẾT DHCP SPOOFING ====")
+        self.logger.info("==== BÁO CÁO DHCP SNOOPING ====")
         for iface, st in self.interface_state.items():
             if st["first_detected"] or st["is_attacking"]:
-                status = "Đang tấn công" if st["is_attacking"] else "Đã tạm dừng"
-                self.logger.info(
-                    f"Cổng: {iface}\n"
-                    f"  Trạng thái: {status}\n"
-                    f"  Lần đầu phát hiện: {st['first_detected']}"
-                )
-        self.logger.info("=" * 50)
+                status = "Đang bị tấn công" if st["is_attacking"] else "Đã dừng"
+                self.logger.info(f"Cổng: {iface} | Trạng thái: {status} | Lần đầu phát hiện: {st['first_detected']}")
+        self.logger.info("=" * 40)
 
     def monitor_logs(self):
-        self.logger.info(f"Đang theo dõi {self.log_file_path}")
         last_check = datetime.now()
-
         for line in self.tail_log_file():
             if not self.running:
                 break
@@ -185,17 +146,16 @@ class DHCPSpoofMonitor:
         self.running = False
 
     def cleanup(self):
-        self.logger.info("Đang dọn dẹp tài nguyên...")
         self.generate_summary_report()
         if self.sound_enabled:
             try:
                 pygame.mixer.quit()
             except:
                 pass
-        self.logger.info("Đã dừng DHCP Spoofing Monitor")
+        self.logger.info("Đã dừng DHCP Snooping Monitor")
 
 def main():
-    monitor = DHCPSpoofMonitor()
+    monitor = DHCPSnoopingMonitor()
     monitor.monitor_logs()
 
 if __name__ == "__main__":
