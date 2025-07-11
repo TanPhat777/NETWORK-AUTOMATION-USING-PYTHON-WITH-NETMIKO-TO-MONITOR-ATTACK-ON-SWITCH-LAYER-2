@@ -69,7 +69,7 @@ if __name__ == "__main__":
 
 
 
-##################
+################## SỬ DỤNG CODE NÀY LÀM CODE CHÍNH ###################
 import time
 import re
 import logging
