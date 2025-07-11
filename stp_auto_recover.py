@@ -86,7 +86,6 @@ class BPDUMonitor:
     def __init__(self):
         self.setup_logging()
 
-        # Cấu hình hệ thống
         self.log_file_path = "/var/log/syslog-remote/syslog.log"
         self.pattern = r"%SPANTREE-2-BLOCK_BPDUGUARD.*port (\S+)"
         self.switch_config = {
@@ -98,34 +97,35 @@ class BPDUMonitor:
         }
 
         self.interface_state = defaultdict(lambda: {
-            "counter": 0,
             "last_log": "",
             "first_detected": None,
             "last_activity": None,
             "is_attacking": False
         })
-
-        self.stable_threshold = 5
         self.timeout_threshold = 30  # giây
         self.alert_sound_path = "/opt/alert.mp3"
         self.running = True
         self.sound_enabled = True
 
         self.init_sound_system()
+
         signal.signal(signal.SIGINT, self.signal_handler)
         signal.signal(signal.SIGTERM, self.signal_handler)
 
     def setup_logging(self):
-        Path("logs").mkdir(exist_ok=True)
-        log_filename = Path("logs") / f"bpdu_monitor_{datetime.now().strftime('%Y%m%d')}.log"
+        log_dir = Path("logs")
+        log_dir.mkdir(exist_ok=True)
+        log_filename = log_dir / f"bpdu_monitor_{datetime.now().strftime('%Y%m%d')}.log"
+
         logging.basicConfig(
             level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
+            format="%(asctime)s - %(levelname)s - %(message)s",
             handlers=[
                 logging.FileHandler(log_filename, encoding='utf-8'),
                 logging.StreamHandler(sys.stdout)
             ]
         )
+
         self.logger = logging.getLogger(__name__)
         self.logger.info("Bắt đầu theo dõi tấn công BPDU")
 
@@ -160,9 +160,10 @@ class BPDUMonitor:
                         time.sleep(0.1)
                         continue
                     yield line.strip()
+        except FileNotFoundError:
+            self.logger.error(f"Không tìm thấy file log: {self.log_file_path}")
         except Exception as e:
             self.logger.error(f"Lỗi đọc file log: {e}")
-            return
 
     def process_bpdu_attack(self, interface, log_line):
         now = datetime.now()
@@ -170,54 +171,42 @@ class BPDUMonitor:
         state["last_activity"] = now
 
         if not state["is_attacking"]:
-            state.update({
-                "is_attacking": True,
-                "first_detected": now,
-                "counter": 0,
-                "last_log": log_line
-            })
+            state["first_detected"] = now
+            state["is_attacking"] = True
+            state["last_log"] = log_line
             self.logger.warning(f"PHÁT HIỆN TẤN CÔNG BPDU TRÊN CỔNG {interface}")
+            self.logger.info(f"Log: {log_line}")
             threading.Thread(target=self.play_alert, daemon=True).start()
         else:
-            if log_line == state["last_log"]:
-                state["counter"] += 1
-            else:
-                state["counter"] = 0
+            if log_line != state["last_log"]:
                 state["last_log"] = log_line
-
-        if state["counter"] >= self.stable_threshold:
-            duration = now - state["first_detected"]
-            self.logger.info(f"{interface} - Tấn công đã DỪNG. Thời gian: {duration}")
-            state.update({
-                "is_attacking": False,
-                "first_detected": None,
-                "counter": 0
-            })
+                self.logger.info(f"Log: {log_line}")
 
     def check_timeout_attacks(self):
         now = datetime.now()
         for interface, state in self.interface_state.items():
-            if state["is_attacking"] and state["last_activity"]:
-                delta = now - state["last_activity"]
-                if delta.total_seconds() >= self.timeout_threshold:
-                    duration = now - state["first_detected"]
-                    self.logger.info(
-                        f"{interface} - Tấn công đã DỪNG (timeout). Thời gian: {duration}, "
-                        f"Lần cuối hoạt động: {delta.total_seconds():.1f}s trước"
-                    )
-                    state.update({
-                        "is_attacking": False,
-                        "first_detected": None,
-                        "counter": 0
-                    })
+            if not state["is_attacking"] or not state["last_activity"]:
+                continue
+            delta = now - state["last_activity"]
+            if delta.total_seconds() >= self.timeout_threshold:
+                duration = now - state["first_detected"]
+                self.logger.info(
+                    f"{interface} - Tấn công đã DỪNG (timeout). Thời gian: {duration}, "
+                    f"Lần cuối hoạt động: {delta.total_seconds():.1f}s trước"
+                )
+                state.update({
+                    "is_attacking": False,
+                    "first_detected": None,
+                    "last_log": "",
+                    "last_activity": None
+                })
 
     def generate_summary_report(self):
         if not self.interface_state:
             self.logger.info("Không phát hiện tấn công BPDU nào.")
             return
 
-        self.logger.info("BÁO CÁO TỔNG KẾT BPDU:")
-        self.logger.info("=" * 50)
+        self.logger.info("==== BÁO CÁO TỔNG KẾT BPDU ====")
         for interface, state in self.interface_state.items():
             if state["first_detected"] or state["is_attacking"]:
                 status = "Đang tấn công" if state["is_attacking"] else "Đã dừng"
@@ -229,26 +218,31 @@ class BPDUMonitor:
         self.logger.info("=" * 50)
 
     def monitor_logs(self):
-        self.logger.info("Đang theo dõi file log: %s", self.log_file_path)
-        last_check = datetime.now()
+        self.logger.info(f"Đang theo dõi file log: {self.log_file_path}")
+        self.logger.info(f"Ngưỡng timeout: {self.timeout_threshold}s")
+
+        last_timeout_check = datetime.now()
+
         try:
-            for line in self.tail_log_file():
+            for log_line in self.tail_log_file():
                 if not self.running:
                     break
-                match = re.search(self.pattern, line)
+                match = re.search(self.pattern, log_line)
                 if match:
                     interface = match.group(1)
-                    self.process_bpdu_attack(interface, line)
+                    self.process_bpdu_attack(interface, log_line)
 
                 now = datetime.now()
-                if (now - last_check).total_seconds() >= 10:
+                if (now - last_timeout_check).total_seconds() >= 10:
                     self.check_timeout_attacks()
-                    last_check = now
+                    last_timeout_check = now
+        except Exception as e:
+            self.logger.error(f"Lỗi theo dõi: {e}")
         finally:
             self.cleanup()
 
     def signal_handler(self, signum, frame):
-        self.logger.info(f"Nhận tín hiệu {signum}, dừng chương trình...")
+        self.logger.info(f"Nhận tín hiệu {signum}, đang tắt chương trình...")
         self.running = False
 
     def cleanup(self):
@@ -267,6 +261,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
