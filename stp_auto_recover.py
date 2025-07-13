@@ -19,7 +19,7 @@ class BPDUGuardMonitor:
 
         self.log_file_path = "/var/log/syslog-remote/syslog.log"
 
-        # Mẫu log cảnh báo DHCP snooping rate-limit
+        # Mẫu log cảnh báo BPDU Guard
         self.pattern = r"%SPANTREE-2-BLOCK_BPDUGUARD.*port (\S+)"
 
         self.switch_config = {
@@ -206,7 +206,7 @@ class BPDUGuardMonitor:
                     # Không reset is_persistent để theo dõi pattern
 
     def generate_summary_report(self):
-        self.logger.info("==== BÁO CÁO BPDU FLOODING ====")
+        self.logger.info("==== BÁO CÁO BPDU GUARD ====")
         for iface, st in self.interface_state.items():
             if st["first_detected"] or st["is_attacking"] or st["attack_count"] > 0:
                 status = "Đang bị tấn công" if st["is_attacking"] else "Đã dừng"
@@ -216,7 +216,7 @@ class BPDUGuardMonitor:
 
     def monitor_logs(self):
         # Hiển thị trạng thái khởi động trên terminal
-        print(f"[KHOI DONG] Dang theo doi BPDU FLOODING - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"[KHOI DONG] Dang theo doi BPDU Guard - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"[LOG FILE] {self.log_file_path}")
         print(f"[AM THANH] {'Bat' if self.sound_enabled else 'Tat'}")
         print(f"[RECOVERY] Chu ky khoi phuc tu dong: {self.recovery_interval} giay")
@@ -249,8 +249,8 @@ class BPDUGuardMonitor:
                 pygame.mixer.quit()
             except:
                 pass
-        self.logger.info("Đã dừng BPDU Flooding Monitor")
-        print("[HOAN THANH] Da dung BPDU FLooding Monitor")
+        self.logger.info("Đã dừng BPDU Guard Monitor")
+        print("[HOAN THANH] Da dung BPDU Guard Monitor")
 
 def main():
     monitor = BPDUGuardMonitor()
