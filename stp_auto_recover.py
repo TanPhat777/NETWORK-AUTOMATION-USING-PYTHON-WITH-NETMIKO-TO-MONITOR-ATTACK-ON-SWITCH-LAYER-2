@@ -54,7 +54,7 @@ class BPDUGuardMonitor:
     def setup_logging(self):
         log_dir = Path("logs")
         log_dir.mkdir(exist_ok=True)
-        fn = f"dhcp_snooping_monitor_{datetime.now().strftime('%Y%m%d')}.log"
+        fn = f"bpdu_monitor_{datetime.now().strftime('%Y%m%d')}.log"
         log_file = log_dir / fn
 
         # Chỉ ghi log vào file, không in ra terminal
@@ -64,7 +64,7 @@ class BPDUGuardMonitor:
             handlers=[logging.FileHandler(log_file, encoding="utf-8")]
         )
         self.logger = logging.getLogger(__name__)
-        self.logger.info("Bắt đầu theo dõi DHCP Snooping (rate-limit)")
+        self.logger.info("Bắt đầu theo dõi BPDU Guard")
 
     def init_sound_system(self):
         try:
