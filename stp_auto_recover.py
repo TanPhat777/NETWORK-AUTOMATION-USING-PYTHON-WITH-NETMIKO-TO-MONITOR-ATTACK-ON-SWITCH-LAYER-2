@@ -190,7 +190,7 @@ class BPDUGuardMonitor:
                         self.logger.info(f"{iface} - Tấn công liên tục tạm dừng (timeout). Thời gian: {dur}")
                         
                         # Hiển thị trên terminal
-                        print(f\n"[{now.strftime('%H:%M:%S')}] [THONG TIN] Tan cong lien tuc tam dung - Cong: {iface}")
+                        print(f"\n[{now.strftime('%H:%M:%S')}] [THONG TIN] Tan cong lien tuc tam dung - Cong: {iface}")
                         print(f"[{now.strftime('%H:%M:%S')}] [CANH BAO] Co the se tiep tuc khi cong duoc recovery tu dong!")
                     else:
                         # Ghi log vào file
