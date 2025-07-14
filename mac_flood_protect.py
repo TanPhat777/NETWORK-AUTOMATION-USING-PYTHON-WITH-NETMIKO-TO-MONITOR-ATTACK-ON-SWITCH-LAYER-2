@@ -25,21 +25,25 @@ class MACFloodMonitor:
             "secret": "cisco123",
         }
 
+        self.alert_sound_path = "/opt/alert.mp3"
         self.interface_state = defaultdict(lambda: {
-            "last_log": "",
+            "is_attacking": False,
             "first_detected": None,
             "last_activity": None,
-            "is_attacking": False
+            "attack_count": 0,
+            "attack_timestamps": [],
+            "is_persistent": False,
+            "recovery_cycle": False
         })
 
-        self.timeout_threshold = 30  # giây
-        self.alert_sound_path = "/opt/alert.mp3"
+        self.timeout_threshold = 30
+        self.recovery_interval = 30  # Thời gian recovery của switch
+        self.persistent_threshold = 3  # Số lần tấn công để coi là persistent
         self.running = True
         self.sound_enabled = True
 
         self.init_sound_system()
-
-        signal.signal(signal.SIGINT, self.signal_handler)
+        signal.signal(signal.SIGINT,  self.signal_handler)
         signal.signal(signal.SIGTERM, self.signal_handler)
 
     def setup_logging(self):
@@ -50,10 +54,7 @@ class MACFloodMonitor:
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(message)s",
-            handlers=[
-                logging.FileHandler(log_filename, encoding='utf-8'),
-                logging.StreamHandler(sys.stdout)
-            ]
+            handlers=[logging.FileHandler(log_file, encoding="utf-8")]
         )
 
         self.logger = logging.getLogger(__name__)
@@ -61,14 +62,20 @@ class MACFloodMonitor:
 
     def init_sound_system(self):
         try:
+            # Ẩn pygame welcome message
+            os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
+            
+            # Khởi tạo pygame mixer với các tham số cụ thể
+            pygame.mixer.pre_init(frequency=22050, size=-16, channels=2, buffer=512)
             pygame.mixer.init()
+            
             if not Path(self.alert_sound_path).exists():
-                self.logger.warning(f"Không tìm thấy file âm thanh: {self.alert_sound_path}")
+                self.logger.warning(f"Không tìm thấy âm thanh: {self.alert_sound_path}")
                 self.sound_enabled = False
             else:
-                self.logger.info("Hệ thống âm thanh đã sẵn sàng")
+                self.logger.info("Âm thanh cảnh báo đã sẵn sàng")
         except Exception as e:
-            self.logger.error(f"Lỗi khởi tạo âm thanh: {e}")
+            self.logger.warning(f"Không thể khởi tạo âm thanh: {e}. Chạy ở chế độ im lặng.")
             self.sound_enabled = False
 
     def play_alert(self):
@@ -90,100 +97,153 @@ class MACFloodMonitor:
                         time.sleep(0.1)
                         continue
                     yield line.strip()
-        except FileNotFoundError:
-            self.logger.error(f"Không tìm thấy file log: {self.log_file_path}")
         except Exception as e:
             self.logger.error(f"Lỗi đọc file log: {e}")
+     def is_recovery_cycle_attack(self, interface):
+        """Kiểm tra xem có phải là tấn công liên tục qua recovery cycle không"""
+        st = self.interface_state[interface]
+        timestamps = st["attack_timestamps"]
+        
+        if len(timestamps) < 2:
+            return False
+            
+        # Kiểm tra khoảng cách giữa các lần tấn công
+        recent_timestamps = [ts for ts in timestamps if (datetime.now() - ts).total_seconds() <= 120]
+        
+        if len(recent_timestamps) >= self.persistent_threshold:
+            # Kiểm tra pattern ~30s giữa các lần tấn công
+            intervals = []
+            for i in range(1, len(recent_timestamps)):
+                interval = (recent_timestamps[i] - recent_timestamps[i-1]).total_seconds()
+                intervals.append(interval)
+            
+            if intervals:
+                avg_interval = sum(intervals) / len(intervals)
+                # Nếu khoảng cách trung bình gần với recovery interval (±10s)
+                if 20 <= avg_interval <= 40:
+                    return True
+                    
+        return False
 
-    def process_mac_attack(self, interface, log_line):
+    def process_attack(self, interface, log_line):
         now = datetime.now()
-        state = self.interface_state[interface]
-        state["last_activity"] = now
+        st = self.interface_state[interface]
+        st["last_activity"] = now
+        st["attack_count"] += 1
+        st["attack_timestamps"].append(now)
+        
+        # Giữ lại chỉ 10 timestamps gần nhất
+        if len(st["attack_timestamps"]) > 10:
+            st["attack_timestamps"] = st["attack_timestamps"][-10:]
 
-        if not state["is_attacking"]:
-            state["first_detected"] = now
-            state["is_attacking"] = True
-            state["last_log"] = log_line
+        # Kiểm tra tấn công liên tục
+        is_recovery_cycle = self.is_recovery_cycle_attack(interface)
+        
+        if not st["is_attacking"]:
+            st["is_attacking"] = True
+            st["first_detected"] = now
+            st["recovery_cycle"] = is_recovery_cycle
+
+            # Ghi log đầy đủ vào file
             self.logger.warning(f"PHÁT HIỆN TẤN CÔNG MAC FLOODING TRÊN CỔNG {interface}")
             self.logger.info(f"Log: {log_line}")
+            
+            if is_recovery_cycle:
+                st["is_persistent"] = True
+                self.logger.warning(f"<<TẤN CÔNG LIÊN TỤC>> được phát hiện trên {interface} (Recovery cycle)")
+                print(f"\n[{now.strftime('%H:%M:%S')}] [CANH BAO!!] TAN CONG LIEN TUC - Cong: {interface} (Lan thu {st['attack_count']})")
+                print(f"[{now.strftime('%H:%M:%S')}] [THONG TIN] Cong bi err-disable, se tu dong recovery sau 30 giay")
+                print(f"[{now.strftime('%H:%M:%S')}] [CANH BAO] Day la tan cong lien tuc qua recovery cycle!")
+            else:
+                # Chỉ hiển thị thông tin cơ bản trên terminal
+                print(f"[{now.strftime('%H:%M:%S')}] [CANH BAO] PHAT HIEN TAN CONG - Cong: {interface} (Lan thu {st['attack_count']})")
+            
             threading.Thread(target=self.play_alert, daemon=True).start()
         else:
-            if log_line != state["last_log"]:
-                state["last_log"] = log_line
-                self.logger.info(f"Log: {log_line}")
+            # Tấn công đang tiếp tục
+            if is_recovery_cycle and not st["is_persistent"]:
+                st["is_persistent"] = True
+                self.logger.warning(f"Tấn công trên {interface} chuyển thành LIÊN TỤC")
+                print(f"[{now.strftime('%H:%M:%S')}] [CANH BAO!] TAN CONG CHUYEN THANH LIEN TUC - Cong: {interface}")
+                print(f"[{now.strftime('%H:%M:%S')}] [THONG TIN] Cong se duoc khoi phuc tu dong sau 30 giay")
+            elif st["is_persistent"]:
+                print(f"[{now.strftime('%H:%M:%S')}] [CANH BAO] TAN CONG LIEN TUC TIEP TUC - Cong: {interface} (Lan thu {st['attack_count']})")
+                print(f"[{now.strftime('%H:%M:%S')}] [THONG TIN] Cong bi err-disable, dang cho recovery cycle...")
 
     def check_timeout_attacks(self):
         now = datetime.now()
-        for interface, state in self.interface_state.items():
-            if not state["is_attacking"] or not state["last_activity"]:
-                continue
-            delta = now - state["last_activity"]
-            if delta.total_seconds() >= self.timeout_threshold:
-                duration = now - state["first_detected"]
-                self.logger.info(
-                    f"{interface} - Tấn công MAC Flooding đã DỪNG (timeout). Thời gian: {duration}, "
-                    f"Lần cuối hoạt động: {delta.total_seconds():.1f}s trước"
-                )
-                state.update({
-                    "is_attacking": False,
-                    "first_detected": None,
-                    "last_log": "",
-                    "last_activity": None
-                })
+        for iface, st in self.interface_state.items():
+            if st["is_attacking"] and st["last_activity"]:
+                delta = now - st["last_activity"]
+                if delta.total_seconds() >= self.timeout_threshold:
+                    dur = now - st["first_detected"]
+                    
+                    if st["is_persistent"]:
+                        # Ghi log vào file
+                        self.logger.info(f"{iface} - Tấn công liên tục tạm dừng (timeout). Thời gian: {dur}")
+                        
+                        # Hiển thị trên terminal
+                        print(f"\n[{now.strftime('%H:%M:%S')}] [THONG TIN] Tan cong lien tuc tam dung - Cong: {iface}")
+                        print(f"[{now.strftime('%H:%M:%S')}] [CANH BAO] Co the se tiep tuc khi cong duoc recovery tu dong!")
+                    else:
+                        # Ghi log vào file
+                        self.logger.info(f"{iface} - Tấn công đã dừng (timeout). Thời gian: {dur}")
+                        
+                        # Hiển thị trên terminal
+                        print(f"[{now.strftime('%H:%M:%S')}] [THONG TIN] Tan cong da dung - Cong: {iface}")
+                    
+                    st.update({
+                        "is_attacking": False,
+                        "first_detected": None
+                    })
+                    # Không reset is_persistent để theo dõi pattern
 
     def generate_summary_report(self):
-        if not self.interface_state:
-            self.logger.info("Không phát hiện tấn công MAC Flooding nào.")
-            return
-
-        self.logger.info("==== BÁO CÁO TỔNG KẾT MAC FLOODING ====")
-        for interface, state in self.interface_state.items():
-            if state["first_detected"] or state["is_attacking"]:
-                status = "Đang tấn công" nếu state["is_attacking"] else "Đã dừng"
-                self.logger.info(
-                    f"Cổng: {interface}\n"
-                    f"  Trạng thái: {status}\n"
-                    f"  Lần đầu phát hiện: {state['first_detected']}"
-                )
-        self.logger.info("=" * 50)
+        self.logger.info("==== BÁO CÁO TẤN CÔNG MAC FLOODING ====")
+        for iface, st in self.interface_state.items():
+            if st["first_detected"] or st["is_attacking"] or st["attack_count"] > 0:
+                status = "Đang bị tấn công" if st["is_attacking"] else "Đã dừng"
+                attack_type = "Liên tục" if st["is_persistent"] else "Đơn lẻ"
+                self.logger.info(f"Cổng: {iface} | Trạng thái: {status} | Loại: {attack_type} | Số lần: {st['attack_count']} | Lần đầu: {st['first_detected']}")
+        self.logger.info("=" * 40)
 
     def monitor_logs(self):
-        self.logger.info(f"Đang theo dõi file log: {self.log_file_path}")
-        self.logger.info(f"Ngưỡng timeout: {self.timeout_threshold}s")
+        # Hiển thị trạng thái khởi động trên terminal
+        print(f"[KHOI DONG] Dang theo doi MAC FLOODING - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"[LOG FILE] {self.log_file_path}")
+        print(f"[AM THANH] {'Bat' if self.sound_enabled else 'Tat'}")
+        print(f"[RECOVERY] Chu ky khoi phuc tu dong: {self.recovery_interval} giay")
+        print("=" * 50)
+        
+        last_check = datetime.now()
+        for line in self.tail_log_file():
+            if not self.running:
+                break
+            m = re.search(self.pattern, line)
+            if m:
+                iface = m.group(1)
+                self.process_attack(iface, line)
 
-        last_timeout_check = datetime.now()
+            if (datetime.now() - last_check).total_seconds() >= 10:
+                self.check_timeout_attacks()
+                last_check = datetime.now()
 
-        try:
-            for log_line in self.tail_log_file():
-                if not self.running:
-                    break
-                match = re.search(self.pattern, log_line)
-                if match:
-                    interface = match.group(1)
-                    self.process_mac_attack(interface, log_line)
+        self.cleanup()
 
-                now = datetime.now()
-                if (now - last_timeout_check).total_seconds() >= 10:
-                    self.check_timeout_attacks()
-                    last_timeout_check = now
-        except Exception as e:
-            self.logger.error(f"Lỗi theo dõi: {e}")
-        finally:
-            self.cleanup()
-
-    def signal_handler(self, signum, frame):
-        self.logger.info(f"Nhận tín hiệu {signum}, đang tắt chương trình...")
+    def signal_handler(self, sig, frame):
+        self.logger.info(f"Nhận tín hiệu {sig}, dừng chương trình...")
+        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] [DUNG] Dung chuong trinh...")
         self.running = False
 
     def cleanup(self):
-        self.logger.info("Đang dọn dẹp tài nguyên...")
         self.generate_summary_report()
         if self.sound_enabled:
             try:
                 pygame.mixer.quit()
             except:
                 pass
-        self.logger.info("Đã dừng MAC Flooding Monitor")
+        self.logger.info("Đã dừng MAC FLOODING Monitor")
+        print("[HOAN THANH] Da dung MAC FLOODING Monitor")
 
 def main():
     monitor = MACFloodMonitor()
@@ -191,7 +251,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 
 
