@@ -99,6 +99,7 @@ class MACFloodMonitor:
                     yield line.strip()
         except Exception as e:
             self.logger.error(f"Lỗi đọc file log: {e}")
+            
      def is_recovery_cycle_attack(self, interface):
         """Kiểm tra xem có phải là tấn công liên tục qua recovery cycle không"""
         st = self.interface_state[interface]
