@@ -158,7 +158,8 @@ class MACFloodMonitor:
             else:
                 # Chỉ hiển thị thông tin cơ bản trên terminal
                 print(f"[{now.strftime('%H:%M:%S')}] [CANH BAO] PHAT HIEN TAN CONG - Cong: {interface} (Lan thu {st['attack_count']})")
-            
+                print(f"[{now.strftime('%H:%M:%S')}] [THONG TIN] Day la tan cong don le.")
+                self.logger.info(f"{interface} - Phát hiện tấn công đơn lẻ lần thứ {st['attack_count']}")
             threading.Thread(target=self.play_alert, daemon=True).start()
         else:
             # Tấn công đang tiếp tục
