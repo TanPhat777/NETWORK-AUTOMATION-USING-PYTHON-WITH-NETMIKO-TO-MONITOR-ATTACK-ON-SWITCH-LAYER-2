@@ -157,12 +157,12 @@ class DHCPSnoopingMonitor:
             if is_recovery_cycle:
                 st["is_persistent"] = True
                 self.logger.warning(f"TẤN CÔNG LIÊN TỤC được phát hiện trên {interface} (Recovery cycle)")
-                print(f"[{now.strftime('%H:%M:%S')}] [CANH BAO CAO] TAN CONG LIEN TUC - Cong: {interface} (Lan thu {st['attack_count']})")
+                print(f"[{now.strftime('%H:%M:%S')}] [CANH BAO!!] TAN CONG LIEN TUC - Cong: {interface} (Lan thu {st['attack_count']})")
                 print(f"[{now.strftime('%H:%M:%S')}] [THONG TIN] Cong bi err-disable, se tu dong recovery sau 30 giay")
                 print(f"[{now.strftime('%H:%M:%S')}] [CANH BAO] Day la tan cong lien tuc qua recovery cycle!")
             else:
                 # Chỉ hiển thị thông tin cơ bản trên terminal
-                print(f"[{now.strftime('%H:%M:%S')}] [CANH BAO] PHAT HIEN TAN CONG - Cong: {interface} (Lan thu {st['attack_count']})")
+                print(f"[{now.strftime('%H:%M:%S')}] [CANH BAO!!] PHAT HIEN TAN CONG - Cong: {interface} (Lan thu {st['attack_count']})")
                 print(f"[{now.strftime('%H:%M:%S')}] [THONG TIN] Day la tan cong don le.")
                 self.logger.info(f"{interface} - Phát hiện tấn công đơn lẻ lần thứ {st['attack_count']}")
             threading.Thread(target=self.play_alert, daemon=True).start()
@@ -171,10 +171,10 @@ class DHCPSnoopingMonitor:
             if is_recovery_cycle and not st["is_persistent"]:
                 st["is_persistent"] = True
                 self.logger.warning(f"Tấn công trên {interface} chuyển thành LIÊN TỤC")
-                print(f"[{now.strftime('%H:%M:%S')}] [CANH BAO CAO] TAN CONG CHUYEN THANH LIEN TUC - Cong: {interface}")
+                print(f"[{now.strftime('%H:%M:%S')}] [CANH BAO!!] TAN CONG CHUYEN THANH LIEN TUC - Cong: {interface}")
                 print(f"[{now.strftime('%H:%M:%S')}] [THONG TIN] Cong se duoc khoi phuc tu dong sau 30 giay")
             elif st["is_persistent"]:
-                print(f"[{now.strftime('%H:%M:%S')}] [CANH BAO CAO] TAN CONG LIEN TUC TIEP TUC - Cong: {interface} (Lan thu {st['attack_count']})")
+                print(f"[{now.strftime('%H:%M:%S')}] [CANH BAO!!] TAN CONG LIEN TUC TIEP TUC - Cong: {interface} (Lan thu {st['attack_count']})")
                 print(f"[{now.strftime('%H:%M:%S')}] [THONG TIN] Cong bi err-disable, dang cho recovery cycle...")
 
     def check_timeout_attacks(self):
