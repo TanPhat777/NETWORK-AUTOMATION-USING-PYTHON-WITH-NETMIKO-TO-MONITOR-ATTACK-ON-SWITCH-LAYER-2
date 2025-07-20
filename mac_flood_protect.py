@@ -1,4 +1,3 @@
-################# CODE CHÍNH ###################
 import time
 import re
 import logging
@@ -10,6 +9,7 @@ import threading
 from collections import defaultdict
 import signal
 import sys
+import os
 
 class MACFloodMonitor:
     def __init__(self):
@@ -49,12 +49,13 @@ class MACFloodMonitor:
     def setup_logging(self):
         log_dir = Path("logs")
         log_dir.mkdir(exist_ok=True)
-        log_filename = log_dir / f"mac_flooding_monitor_{datetime.now().strftime('%Y%m%d')}.log"
-
+        fn = f"mac_flooding_monitor_{datetime.now().strftime('%Y%m%d')}.log"
+        log_file = log_dir / fn
+        
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(message)s",
-            handlers=[logging.FileHandler(log_filename, encoding="utf-8")]
+            handlers=[logging.FileHandler(log_file, encoding="utf-8")]
         )
 
         self.logger = logging.getLogger(__name__)
