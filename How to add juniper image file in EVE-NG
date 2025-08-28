@@ -1,0 +1,59 @@
+✅ 1. SSH vào EVE-NG
+
+Truy cập EVE-NG qua SSH (dùng PuTTY hoặc terminal):
+ssh root@<EVE-NG-IP>
+
+✅ 2. Kiểm tra tên template chuẩn
+Juniper có nhiều loại image, mỗi loại cần đặt trong thư mục đúng:
+
+vMX → vmx-vcp và vmx-vfp
+vSRX → vsrxng-xxx
+
+vJunos Switch → vjunos-switch-<version> (ví dụ: vjunos-switch-25.2R1)
+Ở đây bạn đang dùng vJunos Switch nên đường dẫn sẽ là:
+/opt/unetlab/addons/qemu/vjunos-switch-25.2R1/
+
+✅ 3. Tạo thư mục chứa image
+Chạy lệnh:  mkdir -p /opt/unetlab/addons/qemu/vjunos-switch-25.2R1
+
+✅ 4. Upload file image vào thư mục này
+Image của Juniper thường có:
+
+virtioa.qcow2 → disk chính
+metadata-usb-re.img → USB metadata
+
+Upload qua WinSCP hoặc scp vào thư mục:  /opt/unetlab/addons/qemu/vjunos-switch-25.2R1/
+
+✅ 5. Rename file đúng chuẩn
+Trong thư mục vjunos-switch-25.2R1, bạn rename:
+
+mv <ten_image>.qcow2 virtioa.qcow2
+
+Nếu thiếu file metadata-usb-re.img, tạo file rỗng:
+dd if=/dev/zero of=metadata-usb-re.img bs=1M count=64
+
+✅ 6. Fix quyền cho file
+Chạy lệnh:  /opt/unetlab/wrappers/unl_wrapper -a fixpermissions
+
+✅ 7. Kiểm tra cấu hình node trên EVE-NG
+
+Template: Juniper vEX Switch
+
+Image: vjunos-switch-25.2R1
+
+CPU: 2 hoặc 4
+
+RAM: 4096 MB (4 GB) hoặc 6144 MB (6 GB)
+
+Ethernet: 11
+
+CPU Mode: host-passthrough (quan trọng cho KVM)
+
+✅ 8. Bật KVM và kiểm tra hỗ trợ ảo hóa
+kvm-ok
+
+Nếu báo lỗi, bật VT-x trong BIOS và load KVM module:
+modprobe kvm
+
+✅ 9. Start node và chờ boot
+Juniper có thể mất 10-15 phút boot lần đầu. Mở console và theo dõi log.
